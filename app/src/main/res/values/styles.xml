@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="android:Theme.Material.Light.DarkActionBar">
+        <item name="android:colorPrimary">#1565C0</item>
+        <item name="android:colorPrimaryDark">#0D47A1</item>
+        <item name="android:colorAccent">#42A5F5</item>
+        <item name="android:windowBackground">@android:color/white</item>
+        <!-- Avoid content under system bars on Android 15+ (edge-to-edge opt-out) -->
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+
+    <color name="ic_launcher_background">#1565C0</color>
+</resources>
