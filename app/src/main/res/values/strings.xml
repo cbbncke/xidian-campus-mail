@@ -13,4 +13,5 @@
     <string name="toast_saved">已保存，下次打开将自动登录</string>
     <string name="toast_cleared">已清除保存的登录信息</string>
     <string name="toast_empty">学号和密码不能为空</string>
+    <string name="toast_network_retry">网络不可用，恢复后将自动重试</string>
 </resources>

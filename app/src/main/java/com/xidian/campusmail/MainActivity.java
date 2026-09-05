@@ -7,6 +7,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -49,6 +51,11 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
+    // 主页面加载失败标记（DNS/断网等），网络恢复后自动重试
+    private boolean mainFrameLoadFailed;
+    // 本次导航期间主页面是否发生过错误，用于在 onPageFinished 中区分成功与失败
+    private boolean loadHadError;
+    private ConnectivityManager.NetworkCallback networkCallback;
     private String pendingDownloadUrl;
     private String pendingDownloadUserAgent;
     private String pendingDownloadDisposition;
@@ -81,11 +88,55 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                // 每次主页面导航开始时，重置本次加载的错误标记
+                loadHadError = false;
+            }
+
+            @Override
+            public void onReceivedError(WebView view, android.webkit.WebResourceRequest request,
+                                        android.webkit.WebResourceError error) {
+                super.onReceivedError(view, request, error);
+                // 只处理主页面失败（忽略子资源），常见为 DNS 解析失败 net::ERR_NAME_NOT_RESOLVED
+                if (request.isForMainFrame()) {
+                    loadHadError = true;
+                    mainFrameLoadFailed = true;
+                    Toast.makeText(MainActivity.this, R.string.toast_network_retry,
+                            Toast.LENGTH_SHORT).show();
+                }
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                // 仅在本次加载成功（无主页面错误）时清除失败标记。
+                // 注意：加载失败时 WebView 也会回调 onPageFinished，且此时 url 与 view.getUrl()
+                // 相同（错误页显示原地址），因此必须结合 loadHadError 判断，否则失败后标记
+                // 会被误清，导致网络恢复后不再自动重试
+                if (!loadHadError && url != null && url.equals(view.getUrl())) {
+                    mainFrameLoadFailed = false;
+                }
                 tryAutoLogin();
             }
         });
+
+        // 网络恢复后自动重载失败的页面，免去手动点「刷新」
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                runOnUiThread(() -> {
+                    if (mainFrameLoadFailed) {
+                        mainFrameLoadFailed = false;
+                        webView.reload();
+                    }
+                });
+            }
+        };
+        cm.registerDefaultNetworkCallback(networkCallback);
+        // 说明：registerDefaultNetworkCallback 需 API 24+，项目 minSdk 为 26，
+        // 全部受支持设备均可调用，无需版本分支或 ConnectivityManager 以外的备选方案
 
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -464,6 +515,13 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (networkCallback != null) {
+            try {
+                ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+                cm.unregisterNetworkCallback(networkCallback);
+            } catch (Exception ignored) {
+            }
+        }
         if (webView != null) {
             webView.destroy();
         }

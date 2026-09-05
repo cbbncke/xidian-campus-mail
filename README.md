@@ -5,9 +5,9 @@
 
 ## 安装 APK（手机）
 
-1. 把 `西电校园邮箱-v1.0.apk`（或 `app/build/outputs/apk/debug/app-debug.apk`）传到手机上
+1. 把 `西电校园邮箱-v1.2.apk`（或 `app/build/outputs/apk/debug/app-debug.apk`）传到手机上
    （微信/QQ 文件传输、网盘、数据线拷贝都可以）
-2. 点击 APK 文件安装。系统会提示"未知来源应用"，选择 **仍要安装** 即可
+2. 点击 APK 文件安装。从 v1.0 覆盖升级时签名一致，直接安装即可，登录信息不会丢失
 3. 如果被手机拦截，到 **设置 → 应用 → 特殊应用权限（或安全）→ 安装未知应用** 中允许文件管理器安装
 
 ## 使用
@@ -19,14 +19,29 @@
   - 如果会话没过期 → 直接进入邮箱
   - 如果会话过期 → 应用自动填写账号密码并提交，自动登录
 - 菜单里还有：**刷新**、**用浏览器打开**、**清除登录信息**
+- 网络异常（如 `ERR_NAME_NOT_RESOLVED`）时提示"网络不可用，恢复后将自动重试"，
+  网络恢复后**自动重新加载页面并自动登录**，无需手动刷新
+
+## 更新日志
+
+### v1.2
+- 修复：页面加载失败后若手动刷新成功，失败标记未重置，导致下次网络恢复时多余重载
+- 重载标记现会在主页面成功加载后自动清除（加载失败时不清除，保证自动重试仍有效）
+
+### v1.1
+- 新增网络状态监听：页面加载失败后，网络恢复自动重试，不再停留在错误页
+- 加载失败时给出提示文案
+
+### v1.0
+- 首个版本：WebView 打包校园邮箱、自动登录、Keystore 加密保存凭据、附件下载
 
 ## 开发者：在 Android Studio 中打开
 
 用 Android Studio 打开本目录即可（Gradle wrapper 已配置，离线依赖已在本地缓存）。
 
 ```bash
-# 或者命令行构建（使用 Android Studio 自带的 JDK）
-JAVA_HOME="/d/ Android Studio/jbr" ./gradlew assembleDebug
+# 或者命令行构建（本机可用 JDK：C:\Users\SZZY\.jdks\temurin-24）
+JAVA_HOME="C:\Users\SZZY\.jdks\temurin-24" .\gradlew.bat assembleDebug
 # 输出: app/build/outputs/apk/debug/app-debug.apk
 ```
 
