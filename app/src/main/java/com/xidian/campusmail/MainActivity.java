@@ -9,6 +9,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Insets;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.Uri;
@@ -20,10 +22,15 @@ import android.os.Handler;
 import android.os.Looper;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
+import android.text.TextUtils;
 import android.util.Base64;
-import android.view.Menu;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.MenuItem;
+import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.RenderProcessGoneDetail;
@@ -36,7 +43,10 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
+import android.widget.TextView;
 import android.widget.Toast;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
@@ -54,7 +64,19 @@ import javax.crypto.spec.GCMParameterSpec;
 
 public class MainActivity extends Activity {
 
-    private static final String MAIL_URL = "https://mail.stu.xidian.edu.cn/coremail/";
+    // 手机版（hxphone）是独立入口，直接打开可避免被服务端识别成桌面浏览器后
+    // 跳回 PC 版网页（PC 版在手机上会被挤成桌面布局）
+    private static final String MOBILE_MAIL_URL =
+            "https://mail.stu.xidian.edu.cn/coremail/hxphone/";
+    private static final String DESKTOP_MAIL_URL =
+            "https://mail.stu.xidian.edu.cn/coremail/";
+    private static final String MOBILE_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                    + "Chrome/130.0.0.0 Mobile Safari/537.36";
+    private static final String DESKTOP_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                    + "Chrome/130.0.0.0 Safari/537.36";
+    private static final String KEY_DESKTOP_MODE = "desktop_mode";
     private static final String PREFS_NAME = "campus_mail";
     private static final String KEY_USER_ENC = "user_enc";
     private static final String KEY_PASS_ENC = "pass_enc";
@@ -75,6 +97,9 @@ public class MainActivity extends Activity {
     private static final String JS_STATUS_SUBMITTED = "s";
 
     private WebView webView;
+    private LinearLayout rootLayout;
+    private LinearLayout headerView;
+    private FrameLayout webContainer;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private ValueCallback<Uri[]> filePathCallback;
     // 主页面加载失败标记（DNS/断网等），网络恢复后自动重试
@@ -82,7 +107,9 @@ public class MainActivity extends Activity {
     // 本次导航期间主页面是否发生过错误，用于在 onPageFinished 中区分成功与失败
     private boolean loadHadError;
     private ConnectivityManager.NetworkCallback networkCallback;
-    private String lastLoadedUrl = MAIL_URL;
+    // 默认手机版；有些学校可能关闭手机版登录权限，菜单里可切回电脑版页面
+    private boolean desktopMode;
+    private String lastLoadedUrl = MOBILE_MAIL_URL;
     private boolean resumed;
     // 渲染进程在后台被回收时先记录，等回到前台再重建，避免在后台反复拉起渲染进程
     private boolean webViewNeedsRecreate;
@@ -101,9 +128,114 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        desktopMode = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_DESKTOP_MODE, false);
+        lastLoadedUrl = currentMailUrl();
+        buildLayout();
         createWebView();
         registerNetworkCallback();
         registerSystemBackCallback();
+    }
+
+    // ---------- Layout ----------
+
+    private int dp(int value) {
+        return Math.round(getResources().getDisplayMetrics().density * value);
+    }
+
+    /**
+     * 自己画标题栏，而不是用系统 ActionBar。
+     * Android 15 起系统强制 edge-to-edge，系统 ActionBar 与内容区的 insets
+     * 处理不一致，网页顶部会被标题栏盖住（用户能在手机上看到正文第一行被截断）。
+     * 这里用「标题栏 + 网页容器」的纵向布局，并显式把系统栏 insets 变成内边距。
+     */
+    private void buildLayout() {
+        rootLayout = new LinearLayout(this);
+        rootLayout.setOrientation(LinearLayout.VERTICAL);
+        rootLayout.setBackgroundColor(Color.WHITE);
+
+        headerView = new LinearLayout(this);
+        headerView.setOrientation(LinearLayout.HORIZONTAL);
+        headerView.setGravity(Gravity.CENTER_VERTICAL);
+        headerView.setBackgroundColor(0xFF1565C0);
+        headerView.setPadding(dp(16), 0, dp(8), 0);
+
+        TextView title = new TextView(this);
+        title.setText(R.string.app_name);
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        headerView.addView(title, new LinearLayout.LayoutParams(0, dp(56), 1f));
+
+        TextView refresh = makeHeaderAction(getString(R.string.menu_refresh));
+        refresh.setOnClickListener(v -> {
+            if (webView != null) {
+                webView.reload();
+            }
+        });
+        headerView.addView(refresh, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(56)));
+
+        TextView more = makeHeaderAction("\u22ee");
+        more.setContentDescription(getString(R.string.menu_more));
+        more.setOnClickListener(this::showOverflowMenu);
+        headerView.addView(more, new LinearLayout.LayoutParams(dp(44), dp(56)));
+
+        rootLayout.addView(headerView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        webContainer = new FrameLayout(this);
+        rootLayout.addView(webContainer, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        setContentView(rootLayout);
+        applyEdgeToEdge();
+    }
+
+    private TextView makeHeaderAction(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(Color.WHITE);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(dp(12), 0, dp(12), 0);
+        view.setClickable(true);
+        view.setFocusable(true);
+        return view;
+    }
+
+    /**
+     * Android 15+ 会强制边到边；这里主动把系统栏区域交给自己的布局处理：
+     * 标题栏顶部加上状态栏高度（蓝色延伸到状态栏后面），
+     * 网页底部加上导航栏/输入法高度，内容不再被系统栏或标题栏遮挡。
+     */
+    @SuppressLint("NewApi")
+    private void applyEdgeToEdge() {
+        if (Build.VERSION.SDK_INT < 30) {
+            // API 26–29 仍由系统把内容排在系统栏之内，无需额外处理
+            return;
+        }
+        getWindow().setDecorFitsSystemWindows(false);
+        WindowInsetsController controller = getWindow().getInsetsController();
+        if (controller != null) {
+            // 状态栏在蓝色标题栏之上，用白色图标；导航栏在白色页面上，用深色图标
+            controller.setSystemBarsAppearance(
+                    0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+            controller.setSystemBarsAppearance(
+                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+        }
+        rootLayout.setOnApplyWindowInsetsListener((v, insets) -> {
+            Insets bars = insets.getInsets(
+                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            Insets ime = insets.getInsets(WindowInsets.Type.ime());
+            headerView.setPadding(dp(16) + bars.left, bars.top, dp(8) + bars.right, 0);
+            webContainer.setPadding(bars.left, 0, bars.right,
+                    Math.max(bars.bottom, ime.bottom));
+            return WindowInsets.CONSUMED;
+        });
+        rootLayout.requestApplyInsets();
     }
 
     // ---------- WebView ----------
@@ -127,6 +259,9 @@ public class MainActivity extends Activity {
         settings.setUseWideViewPort(true);
         settings.setSupportMultipleWindows(false); // target=_blank loads in the same view
         settings.setMediaPlaybackRequiresUserGesture(true);
+        // 显式声明 UA：手机版下避免服务端把 WebView 当成桌面浏览器而返回 PC 版页面；
+        // 电脑版则需要桌面 UA，否则会被重定向回手机版
+        settings.setUserAgentString(desktopMode ? DESKTOP_USER_AGENT : MOBILE_USER_AGENT);
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
@@ -206,7 +341,7 @@ public class MainActivity extends Activity {
                 if (url == null || url.startsWith("about:")) {
                     url = lastLoadedUrl;
                 }
-                lastLoadedUrl = (url != null && !url.isEmpty()) ? url : MAIL_URL;
+                lastLoadedUrl = (url != null && !url.isEmpty()) ? url : currentMailUrl();
                 destroyWebView();
                 webViewNeedsRecreate = true;
                 // 应用在后台时（如内存紧张被回收）不立刻重建并加载页面，
@@ -260,7 +395,14 @@ public class MainActivity extends Activity {
             }
         });
 
-        setContentView(view);
+        if (webContainer != null) {
+            webContainer.removeAllViews();
+            webContainer.addView(view, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT));
+        } else {
+            setContentView(view);
+        }
         webViewNeedsRecreate = false;
         view.loadUrl(lastLoadedUrl);
     }
@@ -387,41 +529,69 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * 探测并填写登录表单。
-     * 西电 Coremail 登录页的真实结构：用户名字段 #uid，可见密码框 #fakePassword
-     * （提交时由页面自己的 JS 加密后写入隐藏字段 #password），登录按钮 .j-submit。
-     * 只填可见密码框，绝不写隐藏字段，也不在没有把握时盲目提交。
+     * 探测并填写登录表单，同时支持两套页面：
+     *
+     * 1. 手机版 hxphone（AngularJS）：form.login-form，账号 input.account-input，
+     *    密码 input.password，登录按钮 #anchor。
+     * 2. 电脑版登录页：用户名 #uid，可见密码框 #fakePassword（提交时页面自己的 JS
+     *    加密后写入隐藏字段 #password），按钮 .j-submit。
+     *
+     * 只填可见字段，绝不直接写隐藏的 #password；验证码 / 二次验证 / 已有错误提示时
+     * 直接停下交给人工处理。
      */
     private static String buildAutoLoginJs(String username, String password) {
         return "(function(){"
                 + "var USER=" + jsQuote(username) + ",PASS=" + jsQuote(password) + ";"
                 + "try{"
-                + "var f=document.querySelector('form.j-login-form');"
-                + "if(!f){return document.querySelector('.seo-link, .loginArea, .aside')?'" + JS_STATUS_LOGIN_PAGE + "':'" + JS_STATUS_NOT_LOGIN + "';}"
                 + "var v=function(el){return !!(el&&el.offsetParent!==null&&el.getClientRects().length);};"
-                // 验证码、二次验证已出现时必须停下来让人工处理
-                + "if(v(document.querySelector('.j-second-auth-wrap')))return '" + JS_STATUS_BLOCKED + "';"
-                + "if(v(document.querySelector('input[name=verifyCode]')))return '" + JS_STATUS_BLOCKED + "';"
-                + "if(v(document.querySelector('input[name=verifyCellCode]')))return '" + JS_STATUS_BLOCKED + "';"
-                // 页面上已经有错误提示（如密码错误）时不再重复提交，避免账号被锁
-                + "var w=document.querySelector('#warnOrErrDiv');"
-                + "if(w&&v(w)&&(w.textContent||'').replace(/\\s+/g,''))return '" + JS_STATUS_BLOCKED + "';"
-                + "var u=f.querySelector('#uid, input[name=uid], input[name=userName], input[name=username]');"
-                + "var p=f.querySelector('#fakePassword')||f.querySelector('input[type=password]');"
-                + "if(!v(u)||!v(p))return '" + JS_STATUS_LOGIN_PAGE + "';"
-                + "var s=function(el,val){"
-                + "var proto=Object.getPrototypeOf(el);"
-                + "var d=Object.getOwnPropertyDescriptor(proto,'value');"
+                + "var set=function(el,val){"
+                + "var d=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el),'value');"
                 + "if(!d||!d.set){el.value=val;}else{d.set.call(el,val);}"
                 + "el.dispatchEvent(new Event('input',{bubbles:true}));"
                 + "el.dispatchEvent(new Event('change',{bubbles:true}));"
                 + "};"
-                + "s(u,USER);s(p,PASS);"
-                // 只操作真正的登录按钮；当前页面按钮为 .j-submit（type=button）
-                + "var b=f.querySelector('.j-submit, button[type=submit], input[type=submit], .btn-login, .btn-submit, #dologin');"
+                // 填完等 Angular / 页面脚本消化完再点；按钮仍禁用（例如还在做环境检查）
+                // 就重试几次，而不是把一次没点出去的提交计成已尝试
+                + "var fill=function(u,p,b){"
+                + "if(!v(u)||!v(p))return '" + JS_STATUS_LOGIN_PAGE + "';"
+                + "set(u,USER);set(p,PASS);"
                 + "if(!v(b))return '" + JS_STATUS_BLOCKED + "';"
-                + "setTimeout(function(){try{b.click();}catch(e){}},300);"
+                + "var go=function(n){"
+                + "if(!b.disabled){try{b.click();}catch(e){}return;}"
+                + "if(n<6){set(u,USER);set(p,PASS);setTimeout(function(){go(n+1);},400);}"
+                + "};"
+                + "setTimeout(function(){go(0);},300);"
                 + "return '" + JS_STATUS_SUBMITTED + "';"
+                + "};"
+                // ---- 手机版 ----
+                + "var mf=document.querySelector('form.login-form');"
+                + "if(mf){"
+                + "if(v(mf.querySelector('input[ng-model=\"loginParams.verifyCode\"]'))"
+                + "||v(mf.querySelector('input[ng-model=\"loginParams.dynamicPwd\"]'))"
+                + "||v(document.querySelector('#vercodePic')))return '" + JS_STATUS_BLOCKED + "';"
+                + "return fill("
+                + "mf.querySelector('input.account-input')||mf.querySelector('input[ng-model=\"loginParams.uid\"]'),"
+                + "mf.querySelector('input.password')||mf.querySelector('input[ng-model=\"loginParams.password\"]'),"
+                + "document.querySelector('#anchor')||mf.querySelector('button'));"
+                + "}"
+                // ---- 电脑版 ----
+                + "var df=document.querySelector('form.j-login-form');"
+                + "if(df){"
+                + "if(v(document.querySelector('.j-second-auth-wrap'))"
+                + "||v(document.querySelector('input[name=verifyCode]'))"
+                + "||v(document.querySelector('input[name=verifyCellCode]')))return '" + JS_STATUS_BLOCKED + "';"
+                + "var w=document.querySelector('#warnOrErrDiv');"
+                + "if(w&&v(w)&&(w.textContent||'').replace(/\\s+/g,''))return '" + JS_STATUS_BLOCKED + "';"
+                + "return fill("
+                + "df.querySelector('#uid,input[name=uid],input[name=userName],input[name=username]'),"
+                + "df.querySelector('#fakePassword')||df.querySelector('input[type=password]'),"
+                + "df.querySelector('.j-submit,button[type=submit],input[type=submit],.btn-login,.btn-submit'));"
+                + "}"
+                // ---- 还在加载，或已经不是登录页 ----
+                + "if(location.hash&&location.hash.indexOf('login')>=0)return '" + JS_STATUS_LOGIN_PAGE + "';"
+                + "if(!location.hash&&document.querySelector('.index-loading-container'))return '" + JS_STATUS_LOGIN_PAGE + "';"
+                + "if(document.querySelector('.seo-link,.loginArea,.aside'))return '" + JS_STATUS_LOGIN_PAGE + "';"
+                + "return '" + JS_STATUS_NOT_LOGIN + "';"
                 + "}catch(e){return '" + JS_STATUS_BLOCKED + "';}"
                 + "})()";
     }
@@ -685,6 +855,32 @@ public class MainActivity extends Activity {
         return base + "-" + System.currentTimeMillis() + ext;
     }
 
+    private String currentMailUrl() {
+        return desktopMode ? DESKTOP_MAIL_URL : MOBILE_MAIL_URL;
+    }
+
+    /**
+     * 手机版 / 电脑版切换。
+     * 极少数情况下学校会关闭手机版（hxphone）的登录权限，这时可以用电脑版页面；
+     * 切换后记住选择，下次启动直接进入对应版本。
+     */
+    private void toggleWebmailMode() {
+        desktopMode = !desktopMode;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putBoolean(KEY_DESKTOP_MODE, desktopMode).apply();
+        autoLoginAttempts = 0;
+        autoLoginBlockedNotified = false;
+        lastLoadedUrl = currentMailUrl();
+        if (webView != null) {
+            webView.getSettings().setUserAgentString(
+                    desktopMode ? DESKTOP_USER_AGENT : MOBILE_USER_AGENT);
+            webView.loadUrl(lastLoadedUrl);
+        }
+        Toast.makeText(this, desktopMode
+                ? R.string.toast_switched_desktop : R.string.toast_switched_mobile,
+                Toast.LENGTH_SHORT).show();
+    }
+
     private void clearPendingDownload() {
         pendingDownloadUrl = null;
         pendingDownloadUserAgent = null;
@@ -736,10 +932,22 @@ public class MainActivity extends Activity {
 
     // ---------- Menu ----------
 
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.main_menu, menu);
-        return true;
+    /** 自绘标题栏没有系统 ActionBar，溢出菜单用 PopupMenu 弹出同一份菜单资源。 */
+    private void showOverflowMenu(View anchor) {
+        PopupMenu popup = new PopupMenu(this, anchor);
+        popup.getMenuInflater().inflate(R.menu.main_menu, popup.getMenu());
+        // 刷新已经有独立按钮，菜单里不再重复
+        MenuItem refresh = popup.getMenu().findItem(R.id.action_refresh);
+        if (refresh != null) {
+            refresh.setVisible(false);
+        }
+        MenuItem switchMode = popup.getMenu().findItem(R.id.action_switch_mode);
+        if (switchMode != null) {
+            switchMode.setTitle(desktopMode
+                    ? R.string.menu_switch_mobile : R.string.menu_switch_desktop);
+        }
+        popup.setOnMenuItemClickListener(this::onOptionsItemSelected);
+        popup.show();
     }
 
     @Override
@@ -756,6 +964,9 @@ public class MainActivity extends Activity {
         } else if (id == R.id.action_clear_login) {
             clearCredentials();
             Toast.makeText(this, R.string.toast_cleared, Toast.LENGTH_SHORT).show();
+            return true;
+        } else if (id == R.id.action_switch_mode) {
+            toggleWebmailMode();
             return true;
         } else if (id == R.id.action_open_browser) {
             String url = webView != null ? webView.getUrl() : null;

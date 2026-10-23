@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme.Base" parent="android:Theme.Material.Light.DarkActionBar">
+    <!-- 不再使用系统 ActionBar：它不参与 edge-to-edge 的 insets 分发，
+         Android 15+ 上会盖住网页顶部内容。改为应用内自绘标题栏。 -->
+    <style name="AppTheme.Base" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:colorPrimary">#1565C0</item>
         <item name="android:colorPrimaryDark">#0D47A1</item>
         <item name="android:colorAccent">#42A5F5</item>
         <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">#0D47A1</item>
+        <item name="android:navigationBarColor">#0D47A1</item>
     </style>
 
     <style name="AppTheme" parent="AppTheme.Base" />

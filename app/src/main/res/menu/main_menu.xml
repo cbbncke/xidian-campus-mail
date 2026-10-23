@@ -8,6 +8,9 @@
         android:id="@+id/action_save_login"
         android:title="@string/menu_save_login" />
     <item
+        android:id="@+id/action_switch_mode"
+        android:title="@string/menu_switch_desktop" />
+    <item
         android:id="@+id/action_clear_login"
         android:title="@string/menu_clear_login" />
     <item

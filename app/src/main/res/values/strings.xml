@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">西电校园邮箱</string>
+    <string name="menu_more">更多</string>
+    <string name="menu_switch_desktop">切换到电脑版</string>
+    <string name="menu_switch_mobile">切换到手机版</string>
+    <string name="toast_switched_desktop">已切换到电脑版页面</string>
+    <string name="toast_switched_mobile">已切换到手机版页面</string>
     <string name="menu_refresh">刷新</string>
     <string name="menu_open_browser">用浏览器打开</string>
     <string name="menu_save_login">保存登录信息</string>

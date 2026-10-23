@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 30+ 由 MainActivity 自行处理 insets（标题栏延伸进状态栏），
+         因此系统栏透明，状态栏图标保持白色。 -->
+    <style name="AppTheme" parent="AppTheme.Base">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

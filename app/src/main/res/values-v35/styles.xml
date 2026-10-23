@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Android 15 上继续沿用系统栏留白。Android 16（API 36 + target 36）会忽略此开关，
-         系统强制边到边；该版本上的系统栏重叠问题待真机确认后再单独处理。 -->
-    <style name="AppTheme" parent="AppTheme.Base">
-        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
-    </style>
-</resources>
