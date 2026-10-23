@@ -31,6 +31,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.RenderProcessGoneDetail;
@@ -77,6 +78,7 @@ public class MainActivity extends Activity {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                     + "Chrome/130.0.0.0 Safari/537.36";
     private static final String KEY_DESKTOP_MODE = "desktop_mode";
+    private static final String KEY_LAST_VERSION = "last_version_code";
     private static final String PREFS_NAME = "campus_mail";
     private static final String KEY_USER_ENC = "user_enc";
     private static final String KEY_PASS_ENC = "pass_enc";
@@ -119,6 +121,10 @@ public class MainActivity extends Activity {
     private int autoLoginAttempts;
     private long lastAutoLoginSubmitAt;
     private boolean autoLoginBlockedNotified;
+    // 手机版被学校拒绝（perm_func_wap）时只提示一次，避免反复弹窗
+    private boolean desktopFallbackPrompted;
+    // 手机版模式下却加载到电脑版页面时，先强制回手机版一次
+    private boolean mobileRedirectRetried;
 
     private String pendingDownloadUrl;
     private String pendingDownloadUserAgent;
@@ -128,8 +134,21 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        desktopMode = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean(KEY_DESKTOP_MODE, false);
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        // 升级到新版本时重置回手机版：避免旧包遗留的“电脑版”选择让新版本仍打开 PC 页面
+        int versionCode;
+        try {
+            versionCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+        } catch (Exception e) {
+            versionCode = -1;
+        }
+        if (prefs.getInt(KEY_LAST_VERSION, -1) != versionCode) {
+            prefs.edit()
+                    .putInt(KEY_LAST_VERSION, versionCode)
+                    .putBoolean(KEY_DESKTOP_MODE, false)
+                    .apply();
+        }
+        desktopMode = prefs.getBoolean(KEY_DESKTOP_MODE, false);
         lastLoadedUrl = currentMailUrl();
         buildLayout();
         createWebView();
@@ -327,6 +346,22 @@ public class MainActivity extends Activity {
                 if (!loadHadError && url != null && url.equals(v.getUrl())) {
                     mainFrameLoadFailed = false;
                 }
+                // 手机版模式下却加载到了电脑版页面（会话/服务端跳转），先强制回手机版一次；
+                // 仍然被跳回 PC 时说明账号用不了手机版，改为可操作提示
+                boolean desktopMailPage = url != null && !loadHadError
+                        && url.contains("mail.stu.xidian.edu.cn")
+                        && url.contains("/coremail/")
+                        && !url.contains("/hxphone");
+                if (!desktopMode && desktopMailPage) {
+                    if (!mobileRedirectRetried) {
+                        mobileRedirectRetried = true;
+                        lastLoadedUrl = MOBILE_MAIL_URL;
+                        v.loadUrl(MOBILE_MAIL_URL);
+                        return;
+                    }
+                    promptDesktopFallback();
+                    return;
+                }
                 tryAutoLogin();
             }
 
@@ -354,6 +389,17 @@ public class MainActivity extends Activity {
         });
 
         view.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage cm) {
+                // 手机版登录被服务器拒绝时（学校没给账号开 WAP 权限），页面只会弹一个
+                // 很快消失的 toast；这里接管成可操作的提示，引导切到电脑版
+                String msg = cm == null ? null : cm.message();
+                if (!desktopMode && msg != null && msg.contains("perm_func_wap")) {
+                    promptDesktopFallback();
+                }
+                return super.onConsoleMessage(cm);
+            }
+
             @Override
             public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> callback,
                                              FileChooserParams fileChooserParams) {
@@ -588,8 +634,10 @@ public class MainActivity extends Activity {
                 + "df.querySelector('.j-submit,button[type=submit],input[type=submit],.btn-login,.btn-submit'));"
                 + "}"
                 // ---- 还在加载，或已经不是登录页 ----
-                + "if(location.hash&&location.hash.indexOf('login')>=0)return '" + JS_STATUS_LOGIN_PAGE + "';"
-                + "if(!location.hash&&document.querySelector('.index-loading-container'))return '" + JS_STATUS_LOGIN_PAGE + "';"
+                // hxphone 是 hash 路由：hash 为空说明还在初始化，不能当成“已登录”
+                // 而停止探测，否则会错过登录表单出现的时机
+                + "var hx=document.body&&document.body.className&&document.body.className.indexOf('hxphone')>=0;"
+                + "if(hx&&(!location.hash||location.hash.indexOf('login')>=0))return '" + JS_STATUS_LOGIN_PAGE + "';"
                 + "if(document.querySelector('.seo-link,.loginArea,.aside'))return '" + JS_STATUS_LOGIN_PAGE + "';"
                 + "return '" + JS_STATUS_NOT_LOGIN + "';"
                 + "}catch(e){return '" + JS_STATUS_BLOCKED + "';}"
@@ -870,6 +918,8 @@ public class MainActivity extends Activity {
                 .putBoolean(KEY_DESKTOP_MODE, desktopMode).apply();
         autoLoginAttempts = 0;
         autoLoginBlockedNotified = false;
+        desktopFallbackPrompted = false;
+        mobileRedirectRetried = false;
         lastLoadedUrl = currentMailUrl();
         if (webView != null) {
             webView.getSettings().setUserAgentString(
@@ -879,6 +929,26 @@ public class MainActivity extends Activity {
         Toast.makeText(this, desktopMode
                 ? R.string.toast_switched_desktop : R.string.toast_switched_mobile,
                 Toast.LENGTH_SHORT).show();
+    }
+
+    /** 手机版不可用（未开通 WAP 权限）时，提供一键切换到电脑版。 */
+    private void promptDesktopFallback() {
+        if (desktopFallbackPrompted || desktopMode || isFinishing() || isDestroyed()) {
+            return;
+        }
+        desktopFallbackPrompted = true;
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed() || webView == null) {
+                return;
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.dialog_wap_title)
+                    .setMessage(R.string.dialog_wap_message)
+                    .setPositiveButton(R.string.dialog_switch_desktop,
+                            (dialog, which) -> toggleWebmailMode())
+                    .setNegativeButton(R.string.dialog_cancel, null)
+                    .show();
+        });
     }
 
     private void clearPendingDownload() {
@@ -940,6 +1010,11 @@ public class MainActivity extends Activity {
         MenuItem refresh = popup.getMenu().findItem(R.id.action_refresh);
         if (refresh != null) {
             refresh.setVisible(false);
+        }
+        MenuItem modeState = popup.getMenu().findItem(R.id.action_mode_state);
+        if (modeState != null) {
+            modeState.setTitle(desktopMode
+                    ? R.string.menu_mode_desktop : R.string.menu_mode_mobile);
         }
         MenuItem switchMode = popup.getMenu().findItem(R.id.action_switch_mode);
         if (switchMode != null) {

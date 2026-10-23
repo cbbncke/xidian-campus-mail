@@ -2,6 +2,8 @@
 <resources>
     <string name="app_name">西电校园邮箱</string>
     <string name="menu_more">更多</string>
+    <string name="menu_mode_mobile">当前：手机版</string>
+    <string name="menu_mode_desktop">当前：电脑版</string>
     <string name="menu_switch_desktop">切换到电脑版</string>
     <string name="menu_switch_mobile">切换到手机版</string>
     <string name="toast_switched_desktop">已切换到电脑版页面</string>
@@ -24,6 +26,9 @@
     <string name="toast_download_failed">下载失败，请重试</string>
     <string name="toast_storage_denied">没有存储权限，无法保存附件</string>
     <string name="toast_open_link_failed">手机上找不到能打开该链接的应用</string>
+    <string name="dialog_wap_title">手机版登录被拒绝</string>
+    <string name="dialog_wap_message">服务器没有允许这个账号使用手机版（WAP）登录，可能是学校未开通该权限，或账号 / 密码有误。可以改用电脑版页面继续使用。</string>
+    <string name="dialog_switch_desktop">切换到电脑版</string>
     <string name="toast_ssl_error">安全连接失败（证书校验未通过），请检查网络是否被代理或拦截</string>
     <string name="toast_file_picker_failed">手机上找不到文件选择器，无法上传</string>
 </resources>
